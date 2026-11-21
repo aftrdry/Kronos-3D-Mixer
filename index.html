@@ -787,8 +787,8 @@
       }
     }
 
-    /* ================= MOBILE (PHONE) DEDICATED LAYOUT ================= */
-    @media (max-width: 768px) {
+    /* ================= MOBILE (PORTRAIT & LANDSCAPE) ================= */
+    @media (max-width: 768px), (max-height: 540px) and (pointer: coarse) {
       html, body {
         height: 100%;
         overflow: hidden;
@@ -805,8 +805,8 @@
         height: auto;
         grid-template-columns: 1fr auto;
         grid-template-rows: auto auto;
-        padding: 8px 12px;
-        gap: 8px;
+        padding: 7px 12px;
+        gap: 6px;
       }
 
       .brand-tag {
@@ -846,17 +846,19 @@
         width: 36px;
       }
 
-      /* Mobile: 3D Stage fixed at top, only STEM list scrolls below */
+      /* 3D Stage ALWAYS at top (-1), Stems list below (1) with full scroll support */
       .workspace {
-        height: calc(100vh - 86px);
+        height: calc(100dvh - 82px);
         display: flex;
         flex-direction: column;
-        overflow: hidden;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
       }
 
       .stage {
-        height: 245px;
-        min-height: 245px;
+        order: -1;
+        height: 235px;
+        min-height: 210px;
         width: 100%;
         border-bottom: 1px solid var(--hairline);
         flex-shrink: 0;
@@ -877,7 +879,7 @@
       }
 
       #hudFocus {
-        max-width: 55%;
+        max-width: 56%;
         overflow: hidden;
         text-overflow: ellipsis;
       }
@@ -895,10 +897,16 @@
       }
 
       .pane-left {
-        flex: 1;
-        min-height: 0;
+        order: 1;
+        flex: none;
+        min-height: auto;
         border-right: none;
-        overflow: hidden;
+        overflow: visible;
+      }
+
+      .track-scroll {
+        overflow-y: visible;
+        padding-bottom: 24px;
       }
 
       /* Right panel becomes slide-over menu drawer on mobile */
@@ -907,7 +915,7 @@
         top: 0;
         right: -100%;
         width: min(320px, 88vw);
-        height: 100vh;
+        height: 100dvh;
         z-index: 40;
         border-left: 1px solid var(--hairline-strong);
         overflow-y: auto;
@@ -926,6 +934,27 @@
       input[type="range"]::-webkit-slider-thumb {
         width: 15px;
         height: 15px;
+      }
+    }
+
+    /* Mobile Landscape specific height tune so top bar + 3D stage + stems remain scrollable cleanly */
+    @media (max-height: 480px) and (pointer: coarse) {
+      .topbar {
+        grid-template-columns: auto 1fr auto;
+        grid-template-rows: auto;
+        padding: 5px 10px;
+        gap: 8px;
+      }
+      .transport-cluster {
+        grid-column: auto;
+        justify-content: center;
+      }
+      .workspace {
+        height: calc(100dvh - 42px);
+      }
+      .stage {
+        height: 175px;
+        min-height: 175px;
       }
     }
   </style>
@@ -1298,7 +1327,7 @@
       return { ir, rt60 };
     }
 
-    /* ================= WEB AUDIO HYBRID 3D DSP ENGINE ================= */
+    /* ================= WEB AUDIO HYBRID 3D DSP ENGINE (CORRECT L/R LISTENER AXIS) ================= */
     function ensureAudio() {
       if (ctxAudio) return;
 
@@ -1349,6 +1378,7 @@
       masterGain.connect(analyser);
       analyser.connect(ctxAudio.destination);
 
+      // Listener at origin facing -Z (Front Wall), +X = Listener's Right (AirPods R), -X = Listener's Left (AirPods L)
       const listener = ctxAudio.listener;
       if (listener.positionX) {
         listener.positionX.value = 0;
@@ -1392,6 +1422,13 @@
       };
     }
 
+    /**
+     * Spatial math aligned with Listener facing Front Wall (wy = 0):
+     * - Listener is at wy = state.depth * 0.84 looking toward wy = 0 (-Z in WebAudio).
+     * - Source in front of listener has wy < lst.y -> webZ = wy - lst.y (negative = in front of listener).
+     * - Source on listener's right has wx > 0 -> webX = wx (positive = right ear / AirPods R).
+     * - Source on listener's left has wx < 0 -> webX = wx (negative = left ear / AirPods L).
+     */
     function computeTrackSpatialParams(track) {
       const halfW = state.width / 2;
       track.x = Math.max(-halfW + 0.45, Math.min(halfW - 0.45, track.x));
@@ -1399,34 +1436,38 @@
       track.z = Math.max(0.2, Math.min(state.height - 0.3, track.z));
 
       const lst = getListener3D();
-      const dx = track.x - lst.x;
-      const dy = track.y - lst.y;
-      const dz = track.z - lst.z;
+      const webX = track.x - lst.x;       // + right, - left
+      const webZ = track.y - lst.y;       // - in front of listener, + behind listener
+      const webY = track.z - lst.z;       // + above ear height, - below ear height
 
-      const dist = Math.max(0.4, Math.hypot(dx, dy, dz));
-      const angleDeg = Math.round((Math.atan2(dx, -dy) * 180) / Math.PI);
+      const dist = Math.max(0.4, Math.hypot(webX, webZ, webY));
+      // Azimuth angle: -90° = Left, 0° = Straight Front, +90° = Right
+      const angleDeg = Math.round((Math.atan2(webX, -webZ) * 180) / Math.PI);
       const mat = MATERIALS[state.material];
 
       const normDist = Math.min(1, Math.max(0, (dist - 1.0) / 28.0));
       const minAir = track.isLead ? 5500 : 3200;
       const airFreq = Math.round(20000 * Math.pow(minAir / 20000, Math.pow(normDist, 0.85)));
 
+      // Left wall bounce hits Left ear sooner when source is on left; Right wall bounce hits Right ear sooner when on right
       const mirrorL = -state.width - track.x;
       const mirrorR = state.width - track.x;
-      const pathL = Math.hypot(mirrorL - lst.x, dy, dz);
-      const pathR = Math.hypot(mirrorR - lst.x, dy, dz);
+      const pathL = Math.hypot(mirrorL - lst.x, webZ, webY);
+      const pathR = Math.hypot(mirrorR - lst.x, webZ, webY);
 
       const dtL = Math.min(0.45, Math.max(0.006, (pathL - dist) / C_SOUND));
       const dtR = Math.min(0.45, Math.max(0.006, (pathR - dist) / C_SOUND));
       const lowEndScale = track.isLowEnd ? 0.45 : 1.0;
 
-      const gainL = (1.5 / Math.max(1.5, pathL)) * mat.erCoeff * lowEndScale;
-      const gainR = (1.5 / Math.max(1.5, pathR)) * mat.erCoeff * lowEndScale;
+      // Slight stereo early reflection emphasis matching left/right wall proximity
+      const sideBias = Math.max(-0.35, Math.min(0.35, webX / Math.max(1, halfW)));
+      const gainL = (1.5 / Math.max(1.5, pathL)) * mat.erCoeff * lowEndScale * (1.0 - sideBias * 0.45);
+      const gainR = (1.5 / Math.max(1.5, pathR)) * mat.erCoeff * lowEndScale * (1.0 + sideBias * 0.45);
 
       const wet = Math.min(0.82, (0.06 + (dist / 16.0) * 0.52) * mat.wetScale * (track.isLowEnd ? 0.55 : track.isLead ? 0.72 : 1.0));
 
       return {
-        dx, dy, dz, dist, angleDeg, airFreq,
+        webX, webY, webZ, dist, angleDeg, airFreq,
         dtL, dtR, gainL, gainR, wet,
         wetPct: Math.round(wet * 100),
         dampingHz: mat.dampingHz
@@ -1533,11 +1574,11 @@
         const tc = 0.03;
 
         if (track.dsp.panner.positionX) {
-          track.dsp.panner.positionX.setTargetAtTime(sp.dx, now, tc);
-          track.dsp.panner.positionY.setTargetAtTime(sp.dz, now, tc);
-          track.dsp.panner.positionZ.setTargetAtTime(sp.dy, now, tc);
+          track.dsp.panner.positionX.setTargetAtTime(sp.webX, now, tc);
+          track.dsp.panner.positionY.setTargetAtTime(sp.webY, now, tc);
+          track.dsp.panner.positionZ.setTargetAtTime(sp.webZ, now, tc);
         } else {
-          track.dsp.panner.setPosition(sp.dx, sp.dz, sp.dy);
+          track.dsp.panner.setPosition(sp.webX, sp.webY, sp.webZ);
         }
 
         track.dsp.airLpf.frequency.setTargetAtTime(sp.airFreq, now, tc);
@@ -1582,7 +1623,7 @@
     function audioBufferToWavBlob(buffer) {
       const numChannels = buffer.numberOfChannels;
       const sampleRate = buffer.sampleRate;
-      const format = 1; // PCM
+      const format = 1;
       const bitDepth = 16;
 
       const samples = buffer.length;
@@ -1699,11 +1740,10 @@
 
         mGain.connect(offline.destination);
 
-        const lst = getListener3D();
         if (offline.listener.positionX) {
-          offline.listener.positionX.value = lst.x;
-          offline.listener.positionY.value = lst.z;
-          offline.listener.positionZ.value = lst.y;
+          offline.listener.positionX.value = 0;
+          offline.listener.positionY.value = 1.4;
+          offline.listener.positionZ.value = 0;
           offline.listener.forwardZ.value = -1;
           offline.listener.upY.value = 1;
         }
@@ -1745,9 +1785,9 @@
           pan.maxDistance = 60;
           pan.rolloffFactor = 0.72;
           if (pan.positionX) {
-            pan.positionX.value = sp.dx;
-            pan.positionY.value = sp.dz;
-            pan.positionZ.value = sp.dy;
+            pan.positionX.value = sp.webX;
+            pan.positionY.value = sp.webY;
+            pan.positionZ.value = sp.webZ;
           }
 
           const erB = offline.createGain();
@@ -1901,10 +1941,6 @@
       return dt / (rc + dt);
     }
 
-    /**
-     * Mellow Late-Night Jazz Quartet Loop (78 BPM, 8 bars, swing feel)
-     * Progression: Dm9 -> G13 -> Cmaj7 -> A7(#9)
-     */
     async function buildJazzDemoStems() {
       ensureAudio();
       if (ctxAudio.state === 'suspended') await ctxAudio.resume();
@@ -1919,25 +1955,24 @@
       const sr = ctxAudio.sampleRate;
       const bpm = 78;
       const beat = 60 / bpm;
-      const swingEighth = beat * 0.62; // Relaxed jazz swing long-short feel
+      const swingEighth = beat * 0.62;
       const bars = 8;
       const totalSec = bars * 4 * beat;
       const len = Math.floor(sr * totalSec);
 
       const jazzBars = [
-        { bass: 73.42,  walk: [73.42, 87.31, 98.00, 110.00],  chord: [293.66, 349.23, 440.00, 523.25, 659.25] }, // Dm9
-        { bass: 98.00,  walk: [98.00, 110.00, 123.47, 130.81], chord: [246.94, 349.23, 392.00, 493.88, 659.25] }, // G13
-        { bass: 130.81, walk: [130.81, 123.47, 110.00, 98.00], chord: [261.63, 329.63, 392.00, 493.88, 587.33] }, // Cmaj7
-        { bass: 110.00, walk: [110.00, 103.83, 98.00, 82.41],  chord: [277.18, 329.63, 415.30, 493.88, 622.25] }  // A7(#9)
+        { bass: 73.42,  walk: [73.42, 87.31, 98.00, 110.00],  chord: [293.66, 349.23, 440.00, 523.25, 659.25] },
+        { bass: 98.00,  walk: [98.00, 110.00, 123.47, 130.81], chord: [246.94, 349.23, 392.00, 493.88, 659.25] },
+        { bass: 130.81, walk: [130.81, 123.47, 110.00, 98.00], chord: [261.63, 329.63, 392.00, 493.88, 587.33] },
+        { bass: 110.00, walk: [110.00, 103.83, 98.00, 82.41],  chord: [277.18, 329.63, 415.30, 493.88, 622.25] }
       ];
 
-      // 1. 01 RHODES CHORDS: Warm electric piano comping with soft bark & stereo-like chorus warmth
+      // 1. 01 RHODES CHORDS
       const rhodes = ctxAudio.createBuffer(1, len, sr);
       const rBuf = rhodes.getChannelData(0);
       for (let bar = 0; bar < bars; bar++) {
         const ch = jazzBars[bar % jazzBars.length].chord;
         const barStart = bar * 4 * beat;
-        // Soft jazz comp hits (beat 1 & upbeat of 2, or beat 2-and)
         const hits = bar % 2 === 0
           ? [{ t: 0.0, d: 1.45, amp: 0.34 }, { t: 2.0 + swingEighth * 0.4, d: 1.2, amp: 0.24 }]
           : [{ t: 1.0 + swingEighth * 0.4, d: 1.5, amp: 0.30 }, { t: 3.0, d: 1.15, amp: 0.22 }];
@@ -1965,7 +2000,7 @@
         });
       }
 
-      // 2. 02 UPRIGHT BASS: Round wooden double-bass walking quarter notes
+      // 2. 02 UPRIGHT BASS
       const bass = ctxAudio.createBuffer(1, len, sr);
       const bBuf = bass.getChannelData(0);
       for (let bar = 0; bar < bars; bar++) {
@@ -1988,14 +2023,13 @@
         }
       }
 
-      // 3. 03 BRUSH DRUMS: Gentle brush swish + soft kick + hi-hat on 2 & 4
+      // 3. 03 BRUSH DRUMS
       const drums = ctxAudio.createBuffer(1, len, sr);
       const dBuf = drums.getChannelData(0);
       let brushLp = 0;
       for (let bar = 0; bar < bars; bar++) {
         const barStart = bar * 4 * beat;
 
-        // Soft warm kick on 1 & 3
         [0, 2].forEach(b => {
           const s0 = Math.floor((barStart + b * beat) * sr);
           for (let i = 0; i < sr * 0.22 && s0 + i < len; i++) {
@@ -2005,7 +2039,6 @@
           }
         });
 
-        // Foot hi-hat chick on beats 2 & 4
         [1, 3].forEach(b => {
           const s0 = Math.floor((barStart + b * beat) * sr);
           const a = makeLPAlpha(sr, 6800);
@@ -2017,7 +2050,6 @@
           }
         });
 
-        // Gentle brush sweep per beat
         for (let b = 0; b < 4; b++) {
           const s0 = Math.floor((barStart + b * beat) * sr);
           const a = makeLPAlpha(sr, 3800);
@@ -2031,36 +2063,32 @@
         }
       }
 
-      // 4. 04 MELLOW SAX / LEAD: Lyrical, airy tenor/soprano sax melody
+      // 4. 04 MELLOW SAX / LEAD
       const sax = ctxAudio.createBuffer(1, len, sr);
       const sBuf = sax.getChannelData(0);
       const melody = [
-        // Bar 1-2
-        { t: 0.0,  d: 0.85, f: 440.00 }, // A4
-        { t: 1.0,  d: 0.65, f: 493.88 }, // B4
-        { t: 2.0,  d: 1.35, f: 523.25 }, // C5
-        { t: 4.0,  d: 0.85, f: 493.88 }, // B4
-        { t: 5.2,  d: 0.75, f: 440.00 }, // A4
-        { t: 6.2,  d: 1.40, f: 392.00 }, // G4
-        // Bar 3-4
-        { t: 8.0,  d: 0.90, f: 392.00 }, // G4
-        { t: 9.0,  d: 0.70, f: 493.88 }, // B4
-        { t: 10.0, d: 1.45, f: 587.33 }, // D5
-        { t: 12.0, d: 0.90, f: 523.25 }, // C5
-        { t: 13.2, d: 0.75, f: 493.88 }, // B4
-        { t: 14.2, d: 1.40, f: 440.00 }, // A4
-        // Bar 5-6
-        { t: 16.0, d: 0.85, f: 523.25 }, // C5
-        { t: 17.0, d: 0.70, f: 587.33 }, // D5
-        { t: 18.0, d: 1.40, f: 659.25 }, // E5
-        { t: 20.0, d: 0.85, f: 587.33 }, // D5
-        { t: 21.2, d: 0.70, f: 523.25 }, // C5
-        { t: 22.2, d: 1.40, f: 493.88 }, // B4
-        // Bar 7-8 gentle resolution
-        { t: 24.0, d: 1.10, f: 440.00 }, // A4
-        { t: 25.4, d: 0.95, f: 415.30 }, // G#4
-        { t: 26.6, d: 1.05, f: 392.00 }, // G4
-        { t: 28.0, d: 2.20, f: 329.63 }  // E4 restful hold
+        { t: 0.0,  d: 0.85, f: 440.00 },
+        { t: 1.0,  d: 0.65, f: 493.88 },
+        { t: 2.0,  d: 1.35, f: 523.25 },
+        { t: 4.0,  d: 0.85, f: 493.88 },
+        { t: 5.2,  d: 0.75, f: 440.00 },
+        { t: 6.2,  d: 1.40, f: 392.00 },
+        { t: 8.0,  d: 0.90, f: 392.00 },
+        { t: 9.0,  d: 0.70, f: 493.88 },
+        { t: 10.0, d: 1.45, f: 587.33 },
+        { t: 12.0, d: 0.90, f: 523.25 },
+        { t: 13.2, d: 0.75, f: 493.88 },
+        { t: 14.2, d: 1.40, f: 440.00 },
+        { t: 16.0, d: 0.85, f: 523.25 },
+        { t: 17.0, d: 0.70, f: 587.33 },
+        { t: 18.0, d: 1.40, f: 659.25 },
+        { t: 20.0, d: 0.85, f: 587.33 },
+        { t: 21.2, d: 0.70, f: 523.25 },
+        { t: 22.2, d: 1.40, f: 493.88 },
+        { t: 24.0, d: 1.10, f: 440.00 },
+        { t: 25.4, d: 0.95, f: 415.30 },
+        { t: 26.6, d: 1.05, f: 392.00 },
+        { t: 28.0, d: 2.20, f: 329.63 }
       ];
 
       melody.forEach(n => {
