@@ -846,7 +846,6 @@
         width: 36px;
       }
 
-      /* 3D Stage ALWAYS at top (-1), Stems list below (1) with full scroll support */
       .workspace {
         height: calc(100dvh - 82px);
         display: flex;
@@ -909,7 +908,6 @@
         padding-bottom: 24px;
       }
 
-      /* Right panel becomes slide-over menu drawer on mobile */
       .pane-right {
         position: fixed;
         top: 0;
@@ -937,7 +935,6 @@
       }
     }
 
-    /* Mobile Landscape specific height tune so top bar + 3D stage + stems remain scrollable cleanly */
     @media (max-height: 480px) and (pointer: coarse) {
       .topbar {
         grid-template-columns: auto 1fr auto;
@@ -1327,7 +1324,7 @@
       return { ir, rt60 };
     }
 
-    /* ================= WEB AUDIO HYBRID 3D DSP ENGINE (CORRECT L/R LISTENER AXIS) ================= */
+    /* ================= WEB AUDIO HYBRID 3D DSP ENGINE ================= */
     function ensureAudio() {
       if (ctxAudio) return;
 
@@ -1378,7 +1375,6 @@
       masterGain.connect(analyser);
       analyser.connect(ctxAudio.destination);
 
-      // Listener at origin facing -Z (Front Wall), +X = Listener's Right (AirPods R), -X = Listener's Left (AirPods L)
       const listener = ctxAudio.listener;
       if (listener.positionX) {
         listener.positionX.value = 0;
@@ -1423,11 +1419,10 @@
     }
 
     /**
-     * Spatial math aligned with Listener facing Front Wall (wy = 0):
-     * - Listener is at wy = state.depth * 0.84 looking toward wy = 0 (-Z in WebAudio).
-     * - Source in front of listener has wy < lst.y -> webZ = wy - lst.y (negative = in front of listener).
-     * - Source on listener's right has wx > 0 -> webX = wx (positive = right ear / AirPods R).
-     * - Source on listener's left has wx < 0 -> webX = wx (negative = left ear / AirPods L).
+     * Corrected Left/Right spatial mapping:
+     * In screen space (facing Front Wall at top), +track.x is on the right side.
+     * Inverting horizontal sign on webX ensures right-side nodes map to right ear
+     * and left-side nodes map to left ear consistently with perceived stereo.
      */
     function computeTrackSpatialParams(track) {
       const halfW = state.width / 2;
@@ -1436,20 +1431,19 @@
       track.z = Math.max(0.2, Math.min(state.height - 0.3, track.z));
 
       const lst = getListener3D();
-      const webX = track.x - lst.x;       // + right, - left
+      const rawX = track.x - lst.x;
+      const webX = -rawX;                 // Flip horizontal axis to match perceived L/R stereo
       const webZ = track.y - lst.y;       // - in front of listener, + behind listener
       const webY = track.z - lst.z;       // + above ear height, - below ear height
 
       const dist = Math.max(0.4, Math.hypot(webX, webZ, webY));
-      // Azimuth angle: -90° = Left, 0° = Straight Front, +90° = Right
-      const angleDeg = Math.round((Math.atan2(webX, -webZ) * 180) / Math.PI);
+      const angleDeg = Math.round((Math.atan2(rawX, -webZ) * 180) / Math.PI);
       const mat = MATERIALS[state.material];
 
       const normDist = Math.min(1, Math.max(0, (dist - 1.0) / 28.0));
       const minAir = track.isLead ? 5500 : 3200;
       const airFreq = Math.round(20000 * Math.pow(minAir / 20000, Math.pow(normDist, 0.85)));
 
-      // Left wall bounce hits Left ear sooner when source is on left; Right wall bounce hits Right ear sooner when on right
       const mirrorL = -state.width - track.x;
       const mirrorR = state.width - track.x;
       const pathL = Math.hypot(mirrorL - lst.x, webZ, webY);
@@ -1459,7 +1453,6 @@
       const dtR = Math.min(0.45, Math.max(0.006, (pathR - dist) / C_SOUND));
       const lowEndScale = track.isLowEnd ? 0.45 : 1.0;
 
-      // Slight stereo early reflection emphasis matching left/right wall proximity
       const sideBias = Math.max(-0.35, Math.min(0.35, webX / Math.max(1, halfW)));
       const gainL = (1.5 / Math.max(1.5, pathL)) * mat.erCoeff * lowEndScale * (1.0 - sideBias * 0.45);
       const gainR = (1.5 / Math.max(1.5, pathR)) * mat.erCoeff * lowEndScale * (1.0 + sideBias * 0.45);
@@ -1619,7 +1612,7 @@
       });
     }
 
-    /* ================= OFFLINE SPATIAL RENDER & DOWNLOAD (STEM OR SUMMING MIX) ================= */
+    /* ================= OFFLINE SPATIAL RENDER & DOWNLOAD ================= */
     function audioBufferToWavBlob(buffer) {
       const numChannels = buffer.numberOfChannels;
       const sampleRate = buffer.sampleRate;
@@ -1868,10 +1861,10 @@
     function getStage3DPosition(index) {
       const h = state.height;
       const layout = [
-        { x: -state.width * 0.24, y: state.depth * 0.42, z: h * 0.36 }, // 01 Rhodes Chords
-        { x: state.width * 0.14,  y: state.depth * 0.36, z: h * 0.20 }, // 02 Upright Bass
-        { x: 0.0,                 y: state.depth * 0.22, z: h * 0.25 }, // 03 Brush Drums
-        { x: state.width * 0.30,  y: state.depth * 0.48, z: h * 0.42 }  // 04 Mellow Sax
+        { x: -state.width * 0.24, y: state.depth * 0.42, z: h * 0.36 },
+        { x: state.width * 0.14,  y: state.depth * 0.36, z: h * 0.20 },
+        { x: 0.0,                 y: state.depth * 0.22, z: h * 0.25 },
+        { x: state.width * 0.30,  y: state.depth * 0.48, z: h * 0.42 }
       ];
       return layout[index % layout.length];
     }
@@ -1967,7 +1960,6 @@
         { bass: 110.00, walk: [110.00, 103.83, 98.00, 82.41],  chord: [277.18, 329.63, 415.30, 493.88, 622.25] }
       ];
 
-      // 1. 01 RHODES CHORDS
       const rhodes = ctxAudio.createBuffer(1, len, sr);
       const rBuf = rhodes.getChannelData(0);
       for (let bar = 0; bar < bars; bar++) {
@@ -2000,7 +1992,6 @@
         });
       }
 
-      // 2. 02 UPRIGHT BASS
       const bass = ctxAudio.createBuffer(1, len, sr);
       const bBuf = bass.getChannelData(0);
       for (let bar = 0; bar < bars; bar++) {
@@ -2023,7 +2014,6 @@
         }
       }
 
-      // 3. 03 BRUSH DRUMS
       const drums = ctxAudio.createBuffer(1, len, sr);
       const dBuf = drums.getChannelData(0);
       let brushLp = 0;
@@ -2063,7 +2053,6 @@
         }
       }
 
-      // 4. 04 MELLOW SAX / LEAD
       const sax = ctxAudio.createBuffer(1, len, sr);
       const sBuf = sax.getChannelData(0);
       const melody = [
